@@ -53,7 +53,7 @@ def load_data(path):
     law_list = utils.law_to_list(law_path)
     laws = utils.cut_law(law_list)
     laws=list(zip(*laws))
-    laws_len=[len(i) for i in laws[-1]]
+    laws_len=np.array([len(i) for i in laws[-1]])
     laws = utils.lookup_index(laws[-1], word2id, model_config.law_doc_len)
 
     return batches_train,batches_val,batches_test,laws,laws_len

@@ -24,23 +24,11 @@ class Model:
             lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=self.keep_prob)
             cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers)
             self.initial_state = cell.zero_state(self.batch_size, tf.float32)
-            outputs, _ = tf.nn.dynamic_rnn(cell, inputs, initial_state=self.initial_state,
-                                           sequence_length=self.input_length)
-        with tf.name_scope('get_laws'):
-            law_index=layers.fully_connected(outputs,self.n_law,activation_fn=tf.nn.softmax)
-            self.law_index=tf.contrib.framework.argsort(law_index,-1)
-            self.laws=tf.nn.embedding_lookup(laws,self.law_index)
-
-        with tf.name_scope('lstm_law'):
-            lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_law_size, forget_bias=0.0)
-            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=self.keep_prob)
-            cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers)
-            self.initial_state = cell.zero_state(self.batch_size, tf.float32)
-            outputs_law, _ = tf.nn.dynamic_rnn(cell, self.laws, initial_state=self.initial_state,
-                                           sequence_length=law_length)
+            with tf.variable_scope('context'):
+                outputs, _ = tf.nn.dynamic_rnn(cell, inputs, initial_state=self.initial_state,
+                                               sequence_length=self.input_length)
 
         output = tf.expand_dims(tf.reshape(outputs, [self.batch_size, -1, self.lstm_size]), -1)
-
 
         with tf.name_scope("lstm_maxpool"):
             output_pooling = tf.nn.max_pool(output,
@@ -50,13 +38,31 @@ class Model:
                                             name="pool")
             self.output = tf.reshape(output_pooling, [-1, self.lstm_size])
 
+        with tf.name_scope('get_laws'):
+            law_index=layers.fully_connected(self.output,self.n_law,activation_fn=tf.nn.softmax)
+            self.law_index=tf.contrib.framework.argsort(law_index,-1)[:,-self.k_laws:]
+            self.laws=tf.nn.embedding_lookup(laws,self.law_index)
+            law_length=tf.gather(law_length,self.law_index)
+
+        with tf.name_scope('lstm_law'):
+
+            lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_law_size, forget_bias=0.0)
+            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=self.keep_prob)
+            cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers)
+            self.initial_state = cell.zero_state(self.batch_size*self.k_laws, tf.float32)
+            laws_extracted=tf.reshape(self.laws,[self.batch_size*self.k_laws,self.doc_len,self.embedding.get_shape().as_list()[-1]])
+            with tf.variable_scope('law'):
+                outputs_law, _ = tf.nn.dynamic_rnn(cell, laws_extracted, initial_state=self.initial_state,
+                                               sequence_length=tf.reshape(law_length,[-1]))
+            outputs_law=tf.reshape(outputs_law,[self.batch_size,self.k_laws,self.doc_len,self.lstm_law_size])
+
         with tf.name_scope("fc"):
             self.law_output=layers.fully_connected(self.output,self.n_law,activation_fn=None)
             self.law_pred=tf.where(tf.nn.sigmoid(self.law_output)>config.law_threshold)
 
         self.loss_law=tf.losses.sigmoid_cross_entropy(self.law_label,self.law_output)
         loss_reg=tf.losses.get_regularization_loss()*config.l2_ratio
-        self.loss_total=+self.loss_law+loss_reg
+        self.loss_total=self.loss_law+loss_reg
 
     def attention(self,Q,K,V,F_=None,L_=None):
         #Q ...*N*F
@@ -83,6 +89,6 @@ class ModelConfig:
         self.batch_size = 64
         self.fc1_hid_size = 512
         self.n_law = 183
-        self.loss_radio = .5
         self.num_layers = 2
         self.law_threshold = .5
+        self.l2_ratio=.0

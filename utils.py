@@ -46,7 +46,7 @@ def load_data(prefix='train'):
 def cut_data(law_data):
     context,label,n_words=[],[],[]
     for each in law_data:
-        context.append(' '.join(jieba.cut(each[0])))
+        context.append(list(jieba.cut(each[0])))
         n_words.append(len(context[-1]))
         label.append(each[1])
     return context,label,n_words
@@ -55,12 +55,11 @@ def lookup_index(x,word2id,doc_len):
     res=[]
     for each in x:
         tmp=[word2id['BLANK']]*doc_len
-        words=each.split()
-        for i in range(len(words)):
+        for i in range(len(each)):
             if i>=doc_len:
                 break
             try:
-                tmp[i]=word2id[words[i]]
+                tmp[i]=word2id[each[i]]
             except KeyError:
                 tmp[i]=word2id['UNK']
         res.append(tmp)

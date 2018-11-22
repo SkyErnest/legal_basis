@@ -5,11 +5,12 @@ from sklearn.preprocessing import MultiLabelBinarizer
 import json
 import numpy as np
 import pickle,os,time
+from judger import Judger
 
 num_epochs=31
 lr=5e-3
 print_epoch=1
-law_path='data/刑法.txt'
+law_path='data/criminal_law.txt'
 vec_path='data/words.vec'
 emb_path='data/few_shot_emb.npy'
 w2id_path='data/w2id.pkl'
@@ -25,11 +26,12 @@ with open('data/law.txt','r') as f:
 
 def process(param='train'):
     dicts_train, accu_data_train, law_data_train = utils.load_data(param)
-    x, law, n_words = utils.cut_data(law_data_train)
-
-    x=utils.lookup_index(x,word2id,model_config.doc_len)
+    x, law, n_words = utils.cut_data(law_data_train,cut_sentence=True)
+    n_sent=[len(i) for i in n_words]
+    n_words=np.array(n_words).flatten()
+    x=utils.lookup_index_for_sentences(x,word2id,model_config.doc_len,model_config.sent_len)
     # x=[[word2id[j] for j in i.split()] for i in x]
-    batches = list(zip(x,law,n_words))
+    batches = list(zip(x,law,n_sent,n_words))
     print(param,'loaded')
     return batches
 
@@ -52,11 +54,15 @@ def load_data(path):
 
     law_list = utils.law_to_list(law_path)
     laws = utils.cut_law(law_list)
-    laws=list(zip(*laws))
-    laws_len=np.array([len(i) for i in laws[-1]])
-    laws = utils.lookup_index(laws[-1], word2id, model_config.law_doc_len)
 
-    return batches_train,batches_val,batches_test,laws,laws_len
+    model_config.n_law=len(laws)
+
+    laws=list(zip(*laws))
+    laws_doc_len=[len(i) for i in laws[-1]]
+    laws_sent_len=np.array(laws[-1]).flatten()
+    laws = utils.lookup_index_for_sentences(laws[-2], word2id, model_config.law_doc_len,model_config.law_sent_len)
+
+    return batches_train,batches_val,batches_test,laws,laws_doc_len,laws_sent_len
 
 def load_embeddings(vec_path):
     word_embeddings = []
@@ -87,12 +93,13 @@ def load_embeddings2(emb_path,w2id_path):
 def get_feed_dict(batch):
     while len(batch) < model_config.batch_size:
         batch = np.concatenate([batch, batch[:model_config.batch_size - len(batch)]])
-    x, law, n_words = list(zip(*batch))
+    x, law, n_sent,n_words = list(zip(*batch))
     law = MultiLabelBinarizer(classes=law_class).fit_transform(law)
     feed_dict = {train_model.input: x,
                  train_model.law_label: law,
                  train_model.keep_prob: 1.,
-                 train_model.input_length: n_words
+                 train_model.sent_len: n_words,
+                 train_model.doc_len: n_sent
                  }
     return feed_dict
 
@@ -102,10 +109,45 @@ def evaluate():
     for batch in batches_val:
         count += 1
         feed_dict=get_feed_dict(batch)
-        law_pred_b=sess.run([train_model.law_pred],feed_dict=feed_dict)
+        law_pred_b,loss=sess.run([train_model.prediction,train_model.loss],feed_dict=feed_dict)
         law_pred+=[[law_class[j] for j in i] for i in utils.index_to_label(law_pred_b, model_config.batch_size)][:len(batch)]
         if count==val_step_per_epoch:
             break
+
+    with open('data/data_valid_predict.json', 'w',encoding='utf-8') as f:
+        for i in range(len(law_pred)):
+            rex = {"accusation": [0], "articles": [], "imprisonment": 0}
+            rex["articles"]=law_pred[i]
+            print(json.dumps(rex),file=f)
+            # print(rex)
+            # f.write('{{"accusation": [0], "articles": {}, "imprisonment": 0}}'.format(law_pred[i]))
+    J = Judger('data/accu.txt', 'data/law.txt')
+    res = J.test('data/data_valid.json', 'data/data_valid_predict.json')
+    total_score = 0
+    for task_idx in range(2):
+        TP_micro = 0
+        FP_micro = 0
+        FN_micro = 0
+        f1 = []
+        for class_idx in range(len(res[task_idx])):
+            if res[task_idx][class_idx]["TP"] == 0:
+                f1.append(0)
+                continue
+            TP_micro += res[task_idx][class_idx]["TP"]
+            FP_micro += res[task_idx][class_idx]["FP"]
+            FN_micro += res[task_idx][class_idx]["FN"]
+            precision = res[task_idx][class_idx]["TP"] * 1.0 / (res[task_idx][class_idx]["TP"] + res[task_idx][class_idx]["FP"])
+            recall = res[task_idx][class_idx]["TP"] * 1.0 / (res[task_idx][class_idx]["TP"] + res[task_idx][class_idx]["FN"])
+            f1.append(2 * precision * recall / (precision + recall))
+        precision_micro = TP_micro * 1.0 / (TP_micro + FP_micro+1e-6)
+        recall_micro = TP_micro * 1.0 / (TP_micro + FN_micro+1e-6)
+        F1_micro = 2 * precision_micro * recall_micro / (precision_micro + recall_micro+1e-6)
+        F1_macro = np.sum(f1) / len(f1)
+        total_score += 100.0 * (F1_micro + F1_macro)/2
+        print('task id: {}, F1_micro: {}, F1_macro: {}, final score: {}'.format(task_idx + 1, F1_micro, F1_macro, 100.0 * (F1_micro + F1_macro)/2))
+    total_score += res[2]['score'] / res[2]['cnt'] * 100
+    print('task id: 3, score:{}'.format(res[2]['score'] / res[2]['cnt'] * 100))
+    print('total score:', total_score)
 
 
 def chime(step, start):
@@ -117,12 +159,12 @@ def chime(step, start):
 
 # word_embeddings, word2id=load_embeddings(vec_path)
 word_embeddings, word2id=load_embeddings2(emb_path,w2id_path)
-batches_train,batches_val,batches_test,laws,laws_len=load_data(data_path)
+batches_train,batches_val,batches_test,laws,laws_doc_len,laws_sent_len=load_data(data_path)
 
-train_model=Model(model_config,word_embeddings=word_embeddings,law_input=laws,law_length=laws_len)
+train_model=Model(model_config,word_embeddings=word_embeddings,law_input=laws,law_doc_length=laws_doc_len,law_sent_length=laws_sent_len)
 global_step=tf.Variable(0,trainable=False)
 optimizer=tf.train.AdamOptimizer(lr)
-train_op=optimizer.minimize(train_model.loss_total,global_step=global_step)
+train_op=optimizer.minimize(train_model.loss,global_step=global_step)
 
 tf_config = tf.ConfigProto()
 tf_config.gpu_options.allow_growth = True
@@ -133,10 +175,10 @@ start = time.time()
 
 for batch in batches_train:
     feed_dict=get_feed_dict(batch)
-    _,loss_law,loss_total,law_output,chapter_output,output,step,loss_law2=sess.run([train_op,train_model.loss_law,train_model.loss_total,train_model.law_output,train_model.chapter_output,train_model.output,global_step,train_model.loss_law2],feed_dict=feed_dict)
+    _,loss,output,step=sess.run([train_op,train_model.loss,train_model.outputs,global_step],feed_dict=feed_dict)
     if step%100==0:
         start=chime(step,start)
-        print('loss_law',loss_law,'loss_total',loss_total,'loss_law2:',loss_law2)
+        print('loss',loss)
     if (step+1-train_step_per_epoch)%(train_step_per_epoch*print_epoch)==0:
         start=chime(step,start)
         print('epoch:', step // train_step_per_epoch)

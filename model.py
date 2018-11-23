@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.contrib import layers,rnn
 import utils
+import numpy as np
 
 class Model:
     def __init__(self,config,word_embeddings,law_input,law_doc_length,law_sent_length):
@@ -15,46 +16,50 @@ class Model:
         self.fc1_hid_size = config.fc1_hid_size
         self.n_law = config.n_law
         self.keep_prob = tf.placeholder(tf.float32, [])
-        self.input=tf.placeholder(tf.int32, [None,self.doc_len,self.sent_len])
-        self.input_doc_length = tf.placeholder(tf.int32, [None])
-        self.input_sent_length = tf.placeholder(tf.int32, [None])
-        self.law_label=tf.placeholder(tf.float32,[None,self.n_law])
+        self.input=tf.placeholder(tf.int32, [self.batch_size,self.doc_len,self.sent_len])
+        self.input_doc_length = tf.placeholder(tf.int32, [self.batch_size])
+        self.input_sent_length = tf.placeholder(tf.int32, [self.batch_size,self.doc_len])
+        self.law_label=tf.placeholder(tf.float32,[self.batch_size,self.n_law])
         self.embedding=tf.Variable(word_embeddings,trainable=False)
         inputs = tf.nn.embedding_lookup(self.embedding, self.input)
         laws = tf.nn.embedding_lookup(self.embedding, law_input)
 
         inputs_shape=utils.get_tensor_shape(inputs)
-        n_feat=inputs_shape[-1]
+        self.n_fact_feat=self.n_law_feat=inputs_shape[-1]
 
         with tf.name_scope('get_laws'):
-            inputs_2d = tf.reshape(inputs, [self.batch_size, -1])
+            inputs_2d = tf.reshape(inputs, [self.batch_size, self.doc_len * self.sent_len * self.n_fact_feat])
             law_index=layers.fully_connected(inputs_2d,self.n_law,activation_fn=tf.nn.softmax)
             # law_index=tf.nn.top_k(law_index,self.k_laws)
             self.law_index=tf.contrib.framework.argsort(law_index,-1)[:,-self.k_laws:]
+            self.law_index=tf.reshape(self.law_index,[self.batch_size,self.k_laws])
             self.laws=tf.nn.embedding_lookup(laws,self.law_index)
             law_doc_length=tf.gather(law_doc_length,self.law_index)
             law_sent_length=tf.gather(law_sent_length,self.law_index)
 
         with tf.name_scope('fact_encoder'):
-            u_fs=tf.get_variable('u_fs',initializer=layers.xavier_initializer())
-            u_fw=tf.get_variable('u_fw',initializer=layers.xavier_initializer())
-            inputs=tf.reshape(inputs,[self.batch_size*self.doc_len,self.sent_len,n_feat])
+            self.n_fact_feat=self.lstm_size*2
+            # inputs=tf.reshape(inputs, [self.batch_size * self.doc_len, self.sent_len, self.n_fact_feat])
+            u_fw=tf.get_variable('u_fw', shape=[1, self.n_fact_feat], initializer=layers.xavier_initializer())
+            u_fs=tf.get_variable('u_fs', shape=[1, self.n_fact_feat], initializer=layers.xavier_initializer())
             sent_encoded=self.seq_encoder(inputs,u_fw,config.lstm_size,self.input_sent_length,'fact_sent')
-            sent_encoded=tf.reshape(sent_encoded,[self.batch_size,self.doc_len,n_feat])
+            # sent_encoded=tf.reshape(sent_encoded, [self.batch_size, self.doc_len, self.n_fact_feat])
             self.d_f=self.seq_encoder(sent_encoded,u_fs,config.lstm_size,self.input_doc_length,'fact_doc')
 
         with tf.name_scope('law_encoder'):
-            u_aw=tf.layers.dense(self.d_f,n_feat)
-            u_as=tf.layers.dense(self.d_f,n_feat)
-            laws=tf.reshape(self.laws,[self.batch_size*self.k_laws*self.law_doc_len,self.law_sent_len,n_feat])
-            sent_encoded=self.seq_encoder(laws,u_aw,config.lstm_law_size,law_sent_length,'law_sent')
-            sent_encoded=tf.reshape(sent_encoded,[self.batch_size*self.k_laws,self.doc_len,n_feat])
+            self.n_law_feat=self.lstm_law_size*2
+            u_aw=tf.reshape(tf.layers.dense(self.d_f, self.n_law_feat),[self.batch_size,1,1,1,self.n_law_feat])
+            u_as=tf.reshape(tf.layers.dense(self.d_f, self.n_law_feat),[self.batch_size,1,1,self.n_law_feat])
+            # laws=tf.reshape(self.laws, [self.batch_size * self.k_laws * self.law_doc_len, self.law_sent_len, self.n_law_feat // 2])
+            # law_sent_length=tf.reshape(law_sent_length,[self.batch_size*self.k_laws*self.law_doc_len])
+            sent_encoded=self.seq_encoder(self.laws,u_aw,config.lstm_law_size,law_sent_length,'law_sent')
+            # sent_encoded=tf.reshape(sent_encoded, [self.batch_size * self.k_laws, self.doc_len, self.n_law_feat])
             law_repr=self.seq_encoder(sent_encoded,u_as,config.lstm_law_size,law_doc_length,'law_doc')
-            law_repr=tf.reshape(law_repr,[self.batch_size,self.k_laws,n_feat])
+            # law_repr=tf.reshape(law_repr, [self.batch_size, self.k_laws, self.n_law_feat])
 
         with tf.name_scope('law_aggregator'):
-            u_ad=tf.layers.dense(self.d_f,n_feat)
-            self.d_a=self.seq_encoder(law_repr, u_ad, config.lstm_law_size, self.k_laws, 'aggregator')
+            u_ad=tf.reshape(tf.layers.dense(self.d_f, self.n_fact_feat),[self.batch_size,1,self.n_law_feat])
+            self.d_a=self.seq_encoder(law_repr, u_ad, config.lstm_law_size, [self.k_laws]*self.batch_size, 'aggregator')
 
         with tf.name_scope('softmax'):
             self.outputs=tf.layers.dense(tf.concat([self.d_f,self.d_a],-1),self.n_law)
@@ -99,8 +104,14 @@ class Model:
         #Q ...*seq_len_q*F
         #K=V ...*seq_len_k*F
         K_shape=utils.get_tensor_shape(K)
-        scores=tf.layers.dense(K,K_shape[-1],activation=tf.nn.tanh)@tf.transpose(Q,[-1,-2])
-        scores=tf.nn.softmax(scores)
+        K=tf.layers.dense(K,K_shape[-1],activation=tf.nn.tanh)
+        # ======================================================
+        # Q=tf.transpose(Q,[-1,-2])
+        # scores=tf.map_fn(lambda x:x@Q,K,dtype=tf.float32)
+        # -------------another implementation-------------------
+        scores=tf.reduce_sum(K*Q,-1,keepdims=True)
+        #=======================================================
+        scores=tf.nn.softmax(scores,-1)
         return tf.reduce_sum(scores*K,-2)
 
     def gru_encoder(self,input,cell_size,length,scope):
@@ -113,14 +124,17 @@ class Model:
                 cell_fw=cells[0],
                 cell_bw=cells[1],
                 inputs=input,
-                initial_state_fw = cells[0].zero_state(self.batch_size, tf.float32),
-                initial_state_bw = cells[1].zero_state(self.batch_size, tf.float32),
                 sequence_length=length,
                 dtype=tf.float32)
-        return outputs
+        return tf.concat(outputs,-1)
 
     def seq_encoder(self,input,u,cell_size,length,scope):
-        return self.atten_encoder(u,self.gru_encoder(input,cell_size,length,scope))
+        input_shape=utils.get_tensor_shape(input)
+        input=tf.reshape(input,[np.prod(input_shape[:-2])]+input_shape[-2:])
+        length=tf.reshape(length,[-1])
+        rep=self.gru_encoder(input,cell_size,length,scope)
+        rep=tf.reshape(rep,input_shape[:-1]+[cell_size*2])
+        return self.atten_encoder(u,rep)
 
 
 class ModelConfig:
@@ -128,8 +142,8 @@ class ModelConfig:
         self.lstm_size = 100
         self.lstm_law_size=100
         self.k_laws=10
-        self.doc_len = 10
-        self.law_doc_len=500
+        self.doc_len = 15
+        self.law_doc_len=10
         self.batch_size = 64
         self.fc1_hid_size = 512
         self.n_law = 183

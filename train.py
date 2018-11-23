@@ -7,6 +7,7 @@ import numpy as np
 import pickle,os,time
 from judger import Judger
 
+
 num_epochs=31
 lr=5e-3
 print_epoch=1
@@ -27,8 +28,9 @@ with open('data/law.txt','r') as f:
 def process(param='train'):
     dicts_train, accu_data_train, law_data_train = utils.load_data(param)
     x, law, n_words = utils.cut_data(law_data_train,cut_sentence=True)
-    n_sent=[len(i) for i in n_words]
-    n_words=np.array(n_words).flatten()
+    n_sent=[len(i) if len(i)<model_config.doc_len else model_config.doc_len for i in n_words]
+    n_words=utils.trun_n_words(n_words,model_config.sent_len)
+    n_words=utils.align_flatten2d(n_words,model_config.doc_len,flatten=False)
     x=utils.lookup_index_for_sentences(x,word2id,model_config.doc_len,model_config.sent_len)
     # x=[[word2id[j] for j in i.split()] for i in x]
     batches = list(zip(x,law,n_sent,n_words))
@@ -53,13 +55,14 @@ def load_data(path):
     batches_test = utils.batch_iter(batches_test,model_config.batch_size,num_epochs)
 
     law_list = utils.law_to_list(law_path)
-    laws = utils.cut_law(law_list)
+    laws = utils.cut_law(law_list,filter=law_class,cut_sentence=True)
 
     model_config.n_law=len(laws)
 
     laws=list(zip(*laws))
-    laws_doc_len=[len(i) for i in laws[-1]]
-    laws_sent_len=np.array(laws[-1]).flatten()
+    laws_doc_len=[len(i) if len(i)<model_config.law_doc_len else model_config.law_doc_len for i in laws[-1]]
+    laws_sent_len=utils.trun_n_words(laws[-1],model_config.law_sent_len)
+    laws_sent_len=utils.align_flatten2d(laws_sent_len,model_config.law_doc_len,flatten=False)
     laws = utils.lookup_index_for_sentences(laws[-2], word2id, model_config.law_doc_len,model_config.law_sent_len)
 
     return batches_train,batches_val,batches_test,laws,laws_doc_len,laws_sent_len
@@ -98,8 +101,8 @@ def get_feed_dict(batch):
     feed_dict = {train_model.input: x,
                  train_model.law_label: law,
                  train_model.keep_prob: 1.,
-                 train_model.sent_len: n_words,
-                 train_model.doc_len: n_sent
+                 train_model.input_sent_length: n_words,
+                 train_model.input_doc_length: n_sent
                  }
     return feed_dict
 
@@ -110,7 +113,7 @@ def evaluate():
         count += 1
         feed_dict=get_feed_dict(batch)
         law_pred_b,loss=sess.run([train_model.prediction,train_model.loss],feed_dict=feed_dict)
-        law_pred+=[[law_class[j] for j in i] for i in utils.index_to_label(law_pred_b, model_config.batch_size)][:len(batch)]
+        law_pred+= [[law_class[j] for j in i] for i in utils.index_to_label(law_pred_b, model_config.batch_size)][:len(batch)]
         if count==val_step_per_epoch:
             break
 

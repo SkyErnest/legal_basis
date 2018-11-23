@@ -2,6 +2,7 @@ import re,math,json
 import numpy as np
 import jieba
 import tensorflow as tf
+from collections import Iterable
 
 def law_to_list(path):
     with open(path,'r',encoding='utf-8') as f:
@@ -10,41 +11,50 @@ def law_to_list(path):
             if line=='\n' or re.compile(r'第.*[节|章]').search(line[:10]) is not None:
                 continue
             try:
-                tmp=re.compile(r'第.*条').search(line.strip()[:8])[0]
+                tmp=re.compile(r'第.*条').search(line.strip()[:8]).group(0)
                 law.append(line.strip())
             except TypeError:
                 law[-1]+=line.strip()
     return law
 
-def cut_law(law_list, cut_sentence=False):
+def cut_law(law_list, filter=None,cut_sentence=False):
     res=[]
     for each in law_list:
         index,content=each.split('　')
         index=hanzi_to_num(index[1:-1])
         charge,content=content[1:].split('】')
-        if charge[-1]!='罪':
+        # if charge[-1]!='罪':
+        #     continue
+        if filter is not None and index not in filter:
             continue
-        context, n_words = [], []
         if cut_sentence:
-            sent_words, sent_n_words = [], []
+            context, n_words = [], []
             for i in content.split('。'):
-                sent_words.append(list(jieba.cut(i)))
-                sent_n_words.append(len(sent_words[-1]))
-            context.append(sent_words)
-            n_words.append(sent_n_words)
+                if i != '':
+                    context.append(list(jieba.cut(i)))
+                    n_words.append(len(context[-1]))
         else:
-            context.append(list(jieba.cut(each[0])))
-            n_words.append(len(context[-1]))
+            context=list(jieba.cut(content))
+            n_words=len(context[-1])
         res.append([index,charge,context,n_words])
     return res
 
 def hanzi_to_num(hanzi):
+    # for num<10000
+    hanzi=hanzi.strip().replace('零', '')
+    if(hanzi[0])=='十': hanzi = '一'+hanzi
     d = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,'':0}
-    tmp = re.compile(r'[百|十|零]').split(hanzi.strip())
+    m = {'十':1e1,'百':1e2,'千':1e3}
     res = 0
-    for i in range(len(tmp)):
-        res += d[tmp[i]] * math.pow(10, len(tmp) - i -1)
-    return int(res)
+    tmp=0
+    for i in range(len(hanzi)):
+        if hanzi[i] in d:
+            tmp+=d[hanzi[i]]
+        else:
+            tmp*=m[hanzi[i]]
+            res+=tmp
+            tmp=0
+    return int(res+tmp)
 
 def load_data(prefix='train'):
     dicts, accu_data ,law_data = [], [], []
@@ -65,8 +75,9 @@ def cut_data(law_data, cut_sentence=False):
         if cut_sentence:
             sent_words, sent_n_words = [], []
             for i in each[0].split('。'):
-                sent_words.append(list(jieba.cut(i)))
-                sent_n_words.append(len(sent_words[-1]))
+                if i!='':
+                    sent_words.append(list(jieba.cut(i)))
+                    sent_n_words.append(len(sent_words[-1]))
             context.append(sent_words)
             n_words.append(sent_n_words)
         else:
@@ -103,10 +114,13 @@ def lookup_index(x,word2id,doc_len):
     return np.array(res)
 
 def lookup_index_for_sentences(x,word2id,doc_len,sent_len):
-    res = [[word2id['BLANK'] * sent_len] for _ in range(doc_len)]
-    for i in range(len(x)):
-        res[i] = lookup_index(x[i], word2id, sent_len)
-    return res
+    res=[]
+    for each in x:
+        # tmp = [[word2id['BLANK']] * sent_len for _ in range(doc_len)]
+        tmp = lookup_index(each, word2id, sent_len)[:doc_len]
+        tmp=np.pad(tmp,pad_width=[[0,doc_len-len(tmp)],[0,0]],mode='constant')
+        res.append(tmp)
+    return np.array(res)
 
 def batch_iter(data, batch_size, num_epochs, shuffle=True):
     """
@@ -173,6 +187,32 @@ def index_to_label(index,batch_size):
     for each in index:
         res[int(each[0])].append(int(each[1]))
     return res
+
+def flatten(items):
+    """Yield items from any nested iterable; see REF."""
+    for x in items:
+        if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+            yield from flatten(x)
+        else:
+            yield x
+
+def align_flatten2d(items,align_len,flatten=True):
+    res=[]
+    for each in items:
+        each=each[:align_len]
+        res.append(np.pad(each,[0,align_len-len(each)],'constant'))
+    res=np.array(res)
+    if flatten:
+        res=res.flatten()
+    return res
+
+def trun_n_words(n_words,sent_len):
+    for i in range(len(n_words)):
+        for j in range(len(n_words[i])):
+            if n_words[i][j]>sent_len:
+                n_words[i][j]=sent_len
+    return n_words
+
 
 if __name__=='__main__':
     law_list=law_to_list('data/criminal_law.txt')

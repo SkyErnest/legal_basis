@@ -9,7 +9,7 @@ from judger import Judger
 
 
 num_epochs=31
-lr=5e-3
+lr=1e-4
 print_epoch=1
 law_path='data/criminal_law.txt'
 vec_path='data/words.vec'

@@ -13,7 +13,7 @@ def law_to_list(path):
             try:
                 tmp=re.compile(r'第.*条').search(line.strip()[:8]).group(0)
                 law.append(line.strip())
-            except TypeError:
+            except (TypeError,AttributeError):
                 law[-1]+=line.strip()
     return law
 

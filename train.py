@@ -22,18 +22,21 @@ data_path='data/legal_data.pkl'
 model_config=ModelConfig()
 lr=model_config.learning_rate
 
+with open('data/accu.txt','r',encoding='utf-8')as f:
+    accu_class=[i for i in f.read().split('\n')[:-1]]
+
 with open('data/law.txt','r') as f:
     law_class=[int(i) for i in f.read().split('\n')[:-1]]
 
 def process(param='train'):
-    dicts_train, accu_data_train, law_data_train = utils.load_data(param)
-    x, law, n_words = utils.cut_data(law_data_train,cut_sentence=True)
+    dicts_train, data_train = utils.load_data(param)
+    x, accu, law, n_words = utils.cut_data(data_train,cut_sentence=True)
     n_sent=[len(i) if len(i)<model_config.doc_len else model_config.doc_len for i in n_words]
     n_words=utils.trun_n_words(n_words,model_config.sent_len)
     n_words=utils.align_flatten2d(n_words,model_config.doc_len,flatten=False)
     x=utils.lookup_index_for_sentences(x,word2id,model_config.doc_len,model_config.sent_len)
     # x=[[word2id[j] for j in i.split()] for i in x]
-    batches = list(zip(x,law,n_sent,n_words))
+    batches = list(zip(x,accu,law,n_sent,n_words))
     print(param,'loaded')
     return batches
 
@@ -96,10 +99,11 @@ def load_embeddings2(emb_path,w2id_path):
 def get_feed_dict(batch):
     while len(batch) < model_config.batch_size:
         batch = np.concatenate([batch, batch[:model_config.batch_size - len(batch)]])
-    x, law, n_sent,n_words = list(zip(*batch))
+    x, accu, law, n_sent,n_words = list(zip(*batch))
+    accu = MultiLabelBinarizer(classes=accu_class).fit_transform(accu)
     law = MultiLabelBinarizer(classes=law_class).fit_transform(law)
     feed_dict = {train_model.input: x,
-                 train_model.label: law,
+                 train_model.label: accu,
                  train_model.law_label : law,
                  train_model.keep_prob: 1.,
                  train_model.input_sent_length: n_words,

@@ -147,8 +147,8 @@ class Model:
 
 class ModelConfig:
     def __init__(self):
-        self.learning_rate=0.1
-        self.n_class=183
+        self.learning_rate=0.0001
+        self.n_class=202
         self.n_law = 183
         self.lstm_size = 75
         self.lstm_law_size=75

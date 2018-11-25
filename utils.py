@@ -57,21 +57,20 @@ def hanzi_to_num(hanzi):
     return int(res+tmp)
 
 def load_data(prefix='train'):
-    dicts, accu_data ,law_data = [], [], []
+    dicts, main_data = [], []
     with open('data/data_{}.json'.format(prefix), 'r', encoding='utf-8') as f:
         for line in f:
             data = json.loads(line)
             dicts.append(data)
-            accu_data.append([data['fact'], data['meta']['accusation']])
-            law_data.append([data['fact'], data['meta']['relevant_articles']])
-    return dicts,accu_data,law_data
+            main_data.append([data['fact'], data['meta']['accusation'], data['meta']['relevant_articles']])
+    return dicts, main_data
 
 def get_tensor_shape(T):
     return T.get_shape().as_list()
 
-def cut_data(law_data, cut_sentence=False):
-    context,label,n_words=[],[],[]
-    for each in law_data:
+def cut_data(data, cut_sentence=False):
+    context,accu_label,law_label,n_words=[],[],[],[]
+    for each in data:
         if cut_sentence:
             sent_words, sent_n_words = [], []
             for i in each[0].split('。'):
@@ -83,8 +82,9 @@ def cut_data(law_data, cut_sentence=False):
         else:
             context.append(list(jieba.cut(each[0])))
             n_words.append(len(context[-1]))
-        label.append(each[1])
-    return context,label,n_words
+        accu_label.append([i.replace('[','').replace(']','') for i in each[1]])
+        law_label.append(each[2])
+    return context,accu_label,law_label,n_words
 
 # def cut_data_in_sentence(law_data):
 #     context,label,n_sents,n_words=[],[],[],[]

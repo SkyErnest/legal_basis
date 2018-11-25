@@ -14,11 +14,13 @@ class Model:
         self.law_doc_len=config.law_doc_len
         self.batch_size = config.batch_size
         self.n_law = config.n_law
+        self.n_class=config.n_class
         self.keep_prob = tf.placeholder(tf.float32, [])
         self.input=tf.placeholder(tf.int32, [self.batch_size,self.doc_len,self.sent_len])
         self.input_doc_length = tf.placeholder(tf.int32, [self.batch_size])
         self.input_sent_length = tf.placeholder(tf.int32, [self.batch_size,self.doc_len])
-        self.law_label=tf.placeholder(tf.float32,[self.batch_size,self.n_law])
+        self.label=tf.placeholder(tf.float32, [self.batch_size, self.n_class])
+        self.law_label=tf.placeholder(tf.float32, [self.batch_size, self.n_law])
         self.embedding=tf.Variable(word_embeddings,trainable=False)
         inputs = tf.nn.embedding_lookup(self.embedding, self.input)
         laws = tf.nn.embedding_lookup(self.embedding, law_input)
@@ -33,7 +35,7 @@ class Model:
             self.law_index=tf.contrib.framework.argsort(law_index,-1)[:,-self.k_laws:]
             self.law_index=tf.reshape(self.law_index,[self.batch_size,self.k_laws])
             self.laws=tf.nn.embedding_lookup(laws,self.law_index)
-            self.k_law_label=tf.map_fn(lambda x:tf.gather(x[0],x[1]),(self.law_label,self.law_index),dtype=tf.float32)
+            self.k_law_label=tf.map_fn(lambda x:tf.gather(x[0],x[1]), (self.law_label, self.law_index), dtype=tf.float32)
             law_doc_length=tf.gather(law_doc_length,self.law_index)
             law_sent_length=tf.gather(law_sent_length,self.law_index)
 
@@ -64,7 +66,7 @@ class Model:
         with tf.name_scope('softmax'):
             self.outputs=layers.fully_connected(tf.concat([self.d_f,self.d_a],-1),config.fc_size1)
             self.outputs=layers.fully_connected(self.outputs,config.fc_size2)
-            self.outputs=tf.layers.dense(self.outputs,self.n_law)
+            self.outputs=tf.layers.dense(self.outputs,self.n_class)
 
         # with tf.name_scope('lstm'):
         #     lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_size, forget_bias=0.0)
@@ -98,13 +100,13 @@ class Model:
         #     outputs_law=tf.reshape(outputs_law,[self.batch_size,self.k_laws,self.doc_len,self.lstm_law_size])
 
         self.prediction=tf.where(tf.nn.softmax(self.outputs)>config.threshold)
-        self.loss=tf.losses.softmax_cross_entropy(self.norm_sum(self.law_label),self.outputs)
+        self.loss_main=tf.losses.softmax_cross_entropy(self.norm_sum(self.label), self.outputs)
         self.loss_law=tf.losses.log_loss(self.norm_sum(self.k_law_label),self.law_score)
         loss_reg=tf.losses.get_regularization_loss()*config.l2_ratio
-        self.loss=self.loss+loss_reg+config.attention_loss_ratio*self.loss_law
+        self.loss=self.loss_main+loss_reg+config.attention_loss_ratio*self.loss_law
 
     def norm_sum(self,x):
-        return x/tf.reduce_sum(x,-1,keepdims=True)
+        return x/(tf.reduce_sum(x,-1,keepdims=True)+1e-7)
 
     def atten_encoder(self,Q,K):
         #Q ...*seq_len_q*F
@@ -146,6 +148,8 @@ class Model:
 class ModelConfig:
     def __init__(self):
         self.learning_rate=0.1
+        self.n_class=183
+        self.n_law = 183
         self.lstm_size = 75
         self.lstm_law_size=75
         self.fc_size1=200
@@ -154,7 +158,6 @@ class ModelConfig:
         self.doc_len = 15
         self.law_doc_len=10
         self.batch_size = 8
-        self.n_law = 183
         self.num_layers = 2
         self.threshold = .4
         self.l2_ratio=.0

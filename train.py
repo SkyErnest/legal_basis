@@ -99,7 +99,8 @@ def get_feed_dict(batch):
     x, law, n_sent,n_words = list(zip(*batch))
     law = MultiLabelBinarizer(classes=law_class).fit_transform(law)
     feed_dict = {train_model.input: x,
-                 train_model.law_label: law,
+                 train_model.label: law,
+                 train_model.law_label : law,
                  train_model.keep_prob: 1.,
                  train_model.input_sent_length: n_words,
                  train_model.input_doc_length: n_sent
@@ -179,10 +180,10 @@ start = time.time()
 
 for batch in batches_train:
     feed_dict=get_feed_dict(batch)
-    _,loss,output,step=sess.run([train_op,train_model.loss,train_model.outputs,global_step],feed_dict=feed_dict)
+    _,loss_main,loss_law,loss,output,step=sess.run([train_op,train_model.loss_main,train_model.loss_law,train_model.loss,train_model.outputs,global_step],feed_dict=feed_dict)
     if step%100==0:
         start=chime(step,start)
-        print('loss',loss)
+        print('loss_main',loss_main,'loss_law',loss_law,'loss',loss)
     if (step+1-train_step_per_epoch)%(train_step_per_epoch*print_epoch)==0:
         start=chime(step,start)
         print('epoch:', step // train_step_per_epoch)

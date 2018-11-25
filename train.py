@@ -9,7 +9,6 @@ from judger import Judger
 
 
 num_epochs=31
-lr=1e-4
 print_epoch=1
 law_path='data/criminal_law.txt'
 vec_path='data/words.vec'
@@ -21,6 +20,7 @@ w2id_path='data/w2id.pkl'
 data_path='data/legal_data.pkl'
 
 model_config=ModelConfig()
+lr=model_config.learning_rate
 
 with open('data/law.txt','r') as f:
     law_class=[int(i) for i in f.read().split('\n')[:-1]]
@@ -166,7 +166,8 @@ batches_train,batches_val,batches_test,laws,laws_doc_len,laws_sent_len=load_data
 
 train_model=Model(model_config,word_embeddings=word_embeddings,law_input=laws,law_doc_length=laws_doc_len,law_sent_length=laws_sent_len)
 global_step=tf.Variable(0,trainable=False)
-optimizer=tf.train.AdamOptimizer(lr)
+# optimizer=tf.train.AdamOptimizer(lr)
+optimizer=tf.train.GradientDescentOptimizer(lr)
 train_op=optimizer.minimize(train_model.loss,global_step=global_step)
 
 tf_config = tf.ConfigProto()

@@ -13,7 +13,6 @@ class Model:
         self.law_sent_len=config.law_sent_len
         self.law_doc_len=config.law_doc_len
         self.batch_size = config.batch_size
-        self.fc1_hid_size = config.fc1_hid_size
         self.n_law = config.n_law
         self.keep_prob = tf.placeholder(tf.float32, [])
         self.input=tf.placeholder(tf.int32, [self.batch_size,self.doc_len,self.sent_len])
@@ -34,6 +33,7 @@ class Model:
             self.law_index=tf.contrib.framework.argsort(law_index,-1)[:,-self.k_laws:]
             self.law_index=tf.reshape(self.law_index,[self.batch_size,self.k_laws])
             self.laws=tf.nn.embedding_lookup(laws,self.law_index)
+            self.k_law_label=tf.map_fn(lambda x:tf.gather(x[0],x[1]),(self.law_label,self.law_index),dtype=tf.float32)
             law_doc_length=tf.gather(law_doc_length,self.law_index)
             law_sent_length=tf.gather(law_sent_length,self.law_index)
 
@@ -42,9 +42,9 @@ class Model:
             # inputs=tf.reshape(inputs, [self.batch_size * self.doc_len, self.sent_len, self.n_fact_feat])
             u_fw=tf.get_variable('u_fw', shape=[1, self.n_fact_feat], initializer=layers.xavier_initializer())
             u_fs=tf.get_variable('u_fs', shape=[1, self.n_fact_feat], initializer=layers.xavier_initializer())
-            sent_encoded=self.seq_encoder(inputs,u_fw,config.lstm_size,self.input_sent_length,'fact_sent')
+            sent_encoded,_=self.seq_encoder(inputs,u_fw,config.lstm_size,self.input_sent_length,'fact_sent')
             # sent_encoded=tf.reshape(sent_encoded, [self.batch_size, self.doc_len, self.n_fact_feat])
-            self.d_f=self.seq_encoder(sent_encoded,u_fs,config.lstm_size,self.input_doc_length,'fact_doc')
+            self.d_f,_=self.seq_encoder(sent_encoded,u_fs,config.lstm_size,self.input_doc_length,'fact_doc')
 
         with tf.name_scope('law_encoder'):
             self.n_law_feat=self.lstm_law_size*2
@@ -52,17 +52,19 @@ class Model:
             u_as=tf.reshape(tf.layers.dense(self.d_f, self.n_law_feat),[self.batch_size,1,1,self.n_law_feat])
             # laws=tf.reshape(self.laws, [self.batch_size * self.k_laws * self.law_doc_len, self.law_sent_len, self.n_law_feat // 2])
             # law_sent_length=tf.reshape(law_sent_length,[self.batch_size*self.k_laws*self.law_doc_len])
-            sent_encoded=self.seq_encoder(self.laws,u_aw,config.lstm_law_size,law_sent_length,'law_sent')
+            sent_encoded,_=self.seq_encoder(self.laws,u_aw,config.lstm_law_size,law_sent_length,'law_sent')
             # sent_encoded=tf.reshape(sent_encoded, [self.batch_size * self.k_laws, self.doc_len, self.n_law_feat])
-            law_repr=self.seq_encoder(sent_encoded,u_as,config.lstm_law_size,law_doc_length,'law_doc')
+            law_repr,_=self.seq_encoder(sent_encoded,u_as,config.lstm_law_size,law_doc_length,'law_doc')
             # law_repr=tf.reshape(law_repr, [self.batch_size, self.k_laws, self.n_law_feat])
 
         with tf.name_scope('law_aggregator'):
             u_ad=tf.reshape(tf.layers.dense(self.d_f, self.n_fact_feat),[self.batch_size,1,self.n_law_feat])
-            self.d_a=self.seq_encoder(law_repr, u_ad, config.lstm_law_size, [self.k_laws]*self.batch_size, 'aggregator')
+            self.d_a,self.law_score=self.seq_encoder(law_repr, u_ad, config.lstm_law_size, [self.k_laws]*self.batch_size, 'aggregator')
 
         with tf.name_scope('softmax'):
-            self.outputs=tf.layers.dense(tf.concat([self.d_f,self.d_a],-1),self.n_law)
+            self.outputs=layers.fully_connected(tf.concat([self.d_f,self.d_a],-1),config.fc_size1)
+            self.outputs=layers.fully_connected(self.outputs,config.fc_size2)
+            self.outputs=tf.layers.dense(self.outputs,self.n_law)
 
         # with tf.name_scope('lstm'):
         #     lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_size, forget_bias=0.0)
@@ -96,9 +98,13 @@ class Model:
         #     outputs_law=tf.reshape(outputs_law,[self.batch_size,self.k_laws,self.doc_len,self.lstm_law_size])
 
         self.prediction=tf.where(tf.nn.softmax(self.outputs)>config.threshold)
-        self.loss=tf.losses.softmax_cross_entropy(self.law_label,self.outputs)
+        self.loss=tf.losses.softmax_cross_entropy(self.norm_sum(self.law_label),self.outputs)
+        self.loss_law=tf.losses.log_loss(self.norm_sum(self.k_law_label),self.law_score)
         loss_reg=tf.losses.get_regularization_loss()*config.l2_ratio
-        self.loss=self.loss+loss_reg
+        self.loss=self.loss+loss_reg+config.attention_loss_ratio*self.loss_law
+
+    def norm_sum(self,x):
+        return x/tf.reduce_sum(x,-1,keepdims=True)
 
     def atten_encoder(self,Q,K):
         #Q ...*seq_len_q*F
@@ -112,7 +118,7 @@ class Model:
         scores=tf.reduce_sum(K*Q,-1,keepdims=True)
         #=======================================================
         scores=tf.nn.softmax(scores,-1)
-        return tf.reduce_sum(scores*K,-2)
+        return tf.reduce_sum(scores*K,-2),tf.squeeze(scores)
 
     def gru_encoder(self,input,cell_size,length,scope):
         with tf.variable_scope(scope):
@@ -139,15 +145,18 @@ class Model:
 
 class ModelConfig:
     def __init__(self):
-        self.lstm_size = 100
-        self.lstm_law_size=100
-        self.k_laws=10
+        self.learning_rate=0.1
+        self.lstm_size = 75
+        self.lstm_law_size=75
+        self.fc_size1=200
+        self.fc_size2=150
+        self.k_laws=20
         self.doc_len = 15
         self.law_doc_len=10
-        self.batch_size = 64
-        self.fc1_hid_size = 512
+        self.batch_size = 8
         self.n_law = 183
         self.num_layers = 2
-        self.threshold = .5
+        self.threshold = .4
         self.l2_ratio=.0
         self.sent_len=self.law_sent_len=100
+        self.attention_loss_ratio=.1

@@ -64,9 +64,9 @@ class Model:
             self.d_a,self.law_score=self.seq_encoder(law_repr, u_ad, config.lstm_law_size, [self.k_laws]*self.batch_size, 'aggregator')
 
         with tf.name_scope('softmax'):
-            self.outputs=layers.fully_connected(tf.concat([self.d_f,self.d_a],-1),config.fc_size1)
-            self.outputs=layers.fully_connected(self.outputs,config.fc_size2)
-            self.outputs=tf.layers.dense(self.outputs,self.n_class)
+            self.outputs1=layers.fully_connected(tf.concat([self.d_f,self.d_a],-1),config.fc_size1)
+            self.outputs2=layers.fully_connected(self.outputs1,config.fc_size2)
+            self.outputs=layers.fully_connected(self.outputs2,self.n_class,activation_fn=None)
 
         # with tf.name_scope('lstm'):
         #     lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_size, forget_bias=0.0)
@@ -100,7 +100,8 @@ class Model:
         #     outputs_law=tf.reshape(outputs_law,[self.batch_size,self.k_laws,self.doc_len,self.lstm_law_size])
 
         self.prediction=tf.where(tf.nn.softmax(self.outputs)>config.threshold)
-        self.loss_main=tf.losses.softmax_cross_entropy(self.norm_sum(self.label), self.outputs)
+        self.law_prediction=tf.where(self.law_score>config.law_threshold,tf.to_float(self.law_index),tf.zeros_like(self.law_score))
+        self.loss_main=tf.losses.log_loss(self.norm_sum(self.label), tf.nn.softmax(self.outputs))
         self.loss_law=tf.losses.log_loss(self.norm_sum(self.k_law_label),self.law_score)
         loss_reg=tf.losses.get_regularization_loss()*config.l2_ratio
         self.loss=self.loss_main+loss_reg+config.attention_loss_ratio*self.loss_law
@@ -119,7 +120,7 @@ class Model:
         # -------------another implementation-------------------
         scores=tf.reduce_sum(K*Q,-1,keepdims=True)
         #=======================================================
-        scores=tf.nn.softmax(scores,-1)
+        scores=tf.nn.softmax(scores,-2)
         return tf.reduce_sum(scores*K,-2),tf.squeeze(scores)
 
     def gru_encoder(self,input,cell_size,length,scope):
@@ -160,6 +161,7 @@ class ModelConfig:
         self.batch_size = 8
         self.num_layers = 2
         self.threshold = .4
+        self.law_threshold = .4
         self.l2_ratio=.0
         self.sent_len=self.law_sent_len=100
         self.attention_loss_ratio=.1

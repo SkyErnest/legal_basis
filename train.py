@@ -112,20 +112,30 @@ def get_feed_dict(batch):
     return feed_dict
 
 def evaluate():
-    law_pred=[]
+    accu_pred,law_pred=[],[]
     count=0
     for batch in batches_val:
         count += 1
         feed_dict=get_feed_dict(batch)
-        law_pred_b,loss=sess.run([train_model.prediction,train_model.loss],feed_dict=feed_dict)
-        law_pred+= [[law_class[j] for j in i] for i in utils.index_to_label(law_pred_b, model_config.batch_size)][:len(batch)]
+        law_score,law_pred_b,accu_pred_b,loss=sess.run([train_model.law_score,
+                                                        train_model.law_prediction,
+                                                        train_model.prediction,
+                                                        train_model.loss],
+                                                       feed_dict=feed_dict)
+        if count%100==0:
+            print('valid_step:',count,'valid loss:',loss)
+        accu_pred+= [[accu_class[j] for j in i] for i in utils.index_to_label(accu_pred_b, model_config.batch_size)][:len(batch)]
+        law_pred+=law_pred_b.tolist()
         if count==val_step_per_epoch:
             break
 
     with open('data/data_valid_predict.json', 'w',encoding='utf-8') as f:
-        for i in range(len(law_pred)):
-            rex = {"accusation": [0], "articles": [], "imprisonment": 0}
-            rex["articles"]=law_pred[i]
+        for i in range(len(accu_pred)):
+            rex = {"accusation": [], "articles": [], "imprisonment": 0}
+            rex["accusation"]=accu_pred[i]
+            for each in law_pred[i]:
+                if each > model_config.law_threshold:
+                    rex["articles"].append(int(each))
             print(json.dumps(rex),file=f)
             # print(rex)
             # f.write('{{"accusation": [0], "articles": {}, "imprisonment": 0}}'.format(law_pred[i]))
@@ -171,8 +181,8 @@ batches_train,batches_val,batches_test,laws,laws_doc_len,laws_sent_len=load_data
 
 train_model=Model(model_config,word_embeddings=word_embeddings,law_input=laws,law_doc_length=laws_doc_len,law_sent_length=laws_sent_len)
 global_step=tf.Variable(0,trainable=False)
-# optimizer=tf.train.AdamOptimizer(lr)
-optimizer=tf.train.GradientDescentOptimizer(lr)
+optimizer=tf.train.AdamOptimizer(lr)
+# optimizer=tf.train.GradientDescentOptimizer(lr)
 train_op=optimizer.minimize(train_model.loss,global_step=global_step)
 
 tf_config = tf.ConfigProto()
@@ -188,7 +198,7 @@ for batch in batches_train:
     if step%100==0:
         start=chime(step,start)
         print('loss_main',loss_main,'loss_law',loss_law,'loss',loss)
-    if (step+1-train_step_per_epoch)%(train_step_per_epoch*print_epoch)==0:
+    if (step-train_step_per_epoch)%(train_step_per_epoch*print_epoch)==0:
         start=chime(step,start)
         print('epoch:', step // train_step_per_epoch)
         evaluate()

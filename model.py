@@ -158,7 +158,7 @@ class ModelConfig:
         self.k_laws=20
         self.doc_len = 15
         self.law_doc_len=10
-        self.batch_size = 8
+        self.batch_size = 32
         self.num_layers = 2
         self.threshold = .4
         self.law_threshold = .4

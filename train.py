@@ -18,6 +18,8 @@ w2id_path='data/w2id.pkl'
 # emb_path='E:\\iCloudDrive\\Projects\\GitHub\\attribute_charge\\attribute_charge\\few_shot_emb.npy'
 # w2id_path='E:\\iCloudDrive\\Projects\\GitHub\\attribute_charge\\attribute_charge\\w2id.pkl'
 data_path='data/legal_data.pkl'
+restore_path=None
+save_path='model_save/legal_basis-time{}'.format([time.localtime(time.time()).tm_mon, time.localtime(time.time()).tm_mday, time.localtime(time.time()).tm_hour])
 
 model_config=ModelConfig()
 lr=model_config.learning_rate
@@ -136,12 +138,13 @@ def evaluate():
             for each in law_pred[i]:
                 if each > model_config.law_threshold:
                     rex["articles"].append(int(each))
-            print(json.dumps(rex),file=f)
+            print(json.dumps(rex,ensure_ascii=False),file=f)
             # print(rex)
             # f.write('{{"accusation": [0], "articles": {}, "imprisonment": 0}}'.format(law_pred[i]))
     J = Judger('data/accu.txt', 'data/law.txt')
     res = J.test('data/data_valid.json', 'data/data_valid_predict.json')
     total_score = 0
+    scores=[]
     for task_idx in range(2):
         TP_micro = 0
         FP_micro = 0
@@ -163,9 +166,11 @@ def evaluate():
         F1_macro = np.sum(f1) / len(f1)
         total_score += 100.0 * (F1_micro + F1_macro)/2
         print('task id: {}, F1_micro: {}, F1_macro: {}, final score: {}'.format(task_idx + 1, F1_micro, F1_macro, 100.0 * (F1_micro + F1_macro)/2))
+        scores.append([F1_micro,F1_macro])
     total_score += res[2]['score'] / res[2]['cnt'] * 100
     print('task id: 3, score:{}'.format(res[2]['score'] / res[2]['cnt'] * 100))
     print('total score:', total_score)
+    return total_score,scores
 
 
 def chime(step, start):
@@ -188,9 +193,15 @@ train_op=optimizer.minimize(train_model.loss,global_step=global_step)
 tf_config = tf.ConfigProto()
 tf_config.gpu_options.allow_growth = True
 sess=tf.Session(config=tf_config)
+saver=tf.train.Saver()
 # sess=tf.Session()
 sess.run(tf.global_variables_initializer())
+
+if restore_path is not None:
+    saver.restore(sess,restore_path)
+
 start = time.time()
+max_total_score=0.
 
 for batch in batches_train:
     feed_dict=get_feed_dict(batch)
@@ -201,4 +212,7 @@ for batch in batches_train:
     if (step-train_step_per_epoch)%(train_step_per_epoch*print_epoch)==0:
         start=chime(step,start)
         print('epoch:', step // train_step_per_epoch)
-        evaluate()
+        total_score,scores=evaluate()
+        if total_score>max_total_score:
+            saver.save(sess,save_path,step)
+            print('model saved in',save_path)

@@ -206,6 +206,7 @@ def align_flatten2d(items,align_len,flatten=True):
         res=res.flatten()
     return res
 
+
 def trun_n_words(n_words,sent_len):
     for i in range(len(n_words)):
         for j in range(len(n_words[i])):
@@ -213,6 +214,12 @@ def trun_n_words(n_words,sent_len):
                 n_words[i][j]=sent_len
     return n_words
 
+
+def find_1_in_one_hot(matrix,f):
+    for each in matrix:
+        for i in range(len(each)):
+            if each[i]==1:
+                f(i)
 
 if __name__=='__main__':
     law_list=law_to_list('data/criminal_law.txt')
